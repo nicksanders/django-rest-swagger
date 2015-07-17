@@ -9,6 +9,7 @@ import yaml
 import importlib
 
 from .compat import OrderedDict, strip_tags, get_pagination_attribures
+from rest_framework_swagger import SWAGGER_SETTINGS
 from abc import ABCMeta, abstractmethod
 
 from django.http import HttpRequest
@@ -234,10 +235,10 @@ class BaseMethodIntrospector(object):
             serializer = self.get_serializer_class()
         return serializer
 
-    def get_request_serializer_class(self):
+    def get_request_serializer_class(self, only=False):
         parser = self.get_yaml_parser()
         serializer = parser.get_request_serializer_class(self.callback)
-        if serializer is None:
+        if serializer is None and only is False:
             serializer = self.get_serializer_class()
         return serializer
 
@@ -291,6 +292,7 @@ class BaseMethodIntrospector(object):
         body_params = self.build_body_parameters()
         form_params = self.build_form_parameters()
         query_params = self.build_query_parameters()
+        query_params += self.build_query_parameters_from_request_serializer()
         if django_filters is not None:
             query_params.extend(
                 self.build_query_parameters_from_django_filters())
@@ -304,7 +306,8 @@ class BaseMethodIntrospector(object):
             if not form_params and body_params is not None:
                 params.append(body_params)
 
-        if query_params:
+        if (self.get_http_method() in ["GET", "HEAD"] or not
+                SWAGGER_SETTINGS['query_params_only_for_read_methods']):
             params += query_params
 
         return params
@@ -378,6 +381,13 @@ class BaseMethodIntrospector(object):
 
         return params
 
+    def build_query_parameters_from_request_serializer(self):
+        """
+        Builds query parameters from the request serializer class
+        """
+        serializer = self.get_request_serializer_class(only=True)
+        return self.get_fields_from_serializer(serializer, 'query')
+
     def build_query_parameters_from_django_filters(self):
         """
         introspect ``django_filters.FilterSet`` instances.
@@ -407,8 +417,11 @@ class BaseMethodIntrospector(object):
         """
         Builds form parameters from the serializer class
         """
-        data = []
         serializer = self.get_request_serializer_class()
+        return self.get_fields_from_serializer(serializer, 'form')
+
+    def get_fields_from_serializer(self, serializer, paramType):
+        data = []
 
         if serializer is None:
             return data
@@ -430,7 +443,7 @@ class BaseMethodIntrospector(object):
                 # data_format = self.PRIMITIVES.get(data_type)[0]
 
             f = {
-                'paramType': 'form',
+                'paramType': paramType,
                 'name': name,
                 'description': getattr(field, 'help_text', '') or '',
                 'type': data_type,
